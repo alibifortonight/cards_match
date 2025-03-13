@@ -1,0 +1,162 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  background-color: #f5f7fa;
+  font-family: 'Arial', sans-serif;
+}
+
+.scoreboardContainer {
+  background-color: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 2rem;
+  width: 100%;
+  max-width: 600px;
+  text-align: center;
+}
+
+.title {
+  font-size: 2.5rem;
+  color: #333;
+  margin-bottom: 0.5rem;
+}
+
+.subtitle {
+  font-size: 1.5rem;
+  color: #666;
+  margin-bottom: 2rem;
+}
+
+.scoreboardWrapper {
+  margin-bottom: 2rem;
+  overflow-x: auto;
+}
+
+.scoreboard {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 auto;
+}
+
+.scoreboard th {
+  background-color: #f2f2f2;
+  padding: 12px;
+  text-align: left;
+  font-weight: bold;
+  color: #555;
+  border-bottom: 2px solid #ddd;
+}
+
+.scoreboard td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+}
+
+.winner {
+  background-color: rgba(255, 215, 0, 0.1);
+  font-weight: bold;
+}
+
+.currentPlayer {
+  background-color: rgba(0, 123, 255, 0.05);
+}
+
+.winner.currentPlayer {
+  background-color: rgba(255, 215, 0, 0.2);
+}
+
+.crownIcon {
+  margin-left: 8px;
+  font-size: 1.2rem;
+}
+
+.youLabel {
+  font-style: italic;
+  color: #666;
+}
+
+.buttonsContainer {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.button {
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-block;
+  background-color: #f2f2f2;
+  color: #333;
+  border: none;
+}
+
+.button:hover {
+  background-color: #e5e5e5;
+}
+
+.primaryButton {
+  background-color: #4a69bd;
+  color: white;
+}
+
+.primaryButton:hover {
+  background-color: #3c56a5;
+}
+
+.loading {
+  font-size: 1.2rem;
+  color: #666;
+  margin: 2rem 0;
+}
+
+.error {
+  color: #d9534f;
+  font-size: 1.2rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Animation for winner rows */
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
+  }
+  100% {
+    box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+  }
+}
+
+.winner {
+  animation: glow 2s infinite;
+}
+
+/* Responsive styles */
+@media (max-width: 600px) {
+  .scoreboardContainer {
+    padding: 1.5rem;
+  }
+  
+  .title {
+    font-size: 2rem;
+  }
+  
+  .subtitle {
+    font-size: 1.2rem;
+  }
+  
+  .button {
+    padding: 0.6rem 1.2rem;
+  }
+}
