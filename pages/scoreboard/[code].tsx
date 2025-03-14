@@ -35,80 +35,47 @@ export default function Scoreboard() {
   const { code } = router.query;
   
   const [players, setPlayers] = useState<Player[]>([]);
-  const [game, setGame] = useState<Game | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
 
   // Load game and players data
   useEffect(() => {
-    if (!code) return;
-
-    const fetchGameData = async () => {
+    const fetchScoreboard = async () => {
       try {
         setLoading(true);
-
-        // Get the game
+        
+        // Get the game data
         const { data: gameData, error: gameError } = await supabase
           .from('games')
           .select('*')
           .eq('code', code)
           .single();
-
+          
         if (gameError) throw gameError;
-        if (!gameData) throw new Error('Game not found');
         
-        setGame(gameData);
-
-        // Check if the game is completed
-        if (gameData.status !== 'completed') {
-          // If not completed, redirect back to the game page
-          router.push(`/game/${code}`);
-          return;
-        }
-
-        // Get all players for this game, sorted by score in descending order
+        // Get all players in the game
         const { data: playersData, error: playersError } = await supabase
           .from('players')
           .select('*')
           .eq('game_id', gameData.id)
           .order('score', { ascending: false });
-
+          
         if (playersError) throw playersError;
         
-        setPlayers(playersData || []);
-
-        // Get current player from localStorage
-        const storedPlayerId = localStorage.getItem('playerId');
-        if (storedPlayerId) {
-          const currentPlayerData = playersData?.find(p => p.id === storedPlayerId) || null;
-          setCurrentPlayer(currentPlayerData);
-        }
-
-        // Trigger confetti for the winner(s)
-        if (playersData && playersData.length > 0) {
-          const highestScore = playersData[0].score;
-          const winners = playersData.filter(p => p.score === highestScore);
-          
-          // If current player is a winner, show more confetti!
-          const isCurrentPlayerWinner = winners.some(w => w.id === storedPlayerId);
-          
-          if (isCurrentPlayerWinner) {
-            triggerWinnerConfetti();
-          } else {
-            triggerConfetti();
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching game data:', err);
-        setError('Failed to load game data');
-      } finally {
+        setPlayers(playersData);
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching scoreboard:', error);
+        setError('Failed to load scoreboard data');
         setLoading(false);
       }
     };
-
-    fetchGameData();
-  }, [code, router]);
+    
+    if (code) {
+      fetchScoreboard();
+    }
+  }, [code, supabase]);
 
   // Confetti effect for winners
   const triggerWinnerConfetti = () => {

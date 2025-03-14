@@ -54,28 +54,28 @@ export default async function handler(
 
 async function calculateRoundScores(roundId: string, roundNumber: number) {
   try {
-    // Get the round to determine if it's a match or unmatch round
-    const { data: round, error: roundError } = await supabase
+    // Get game ID from the round
+    const { data: roundData, error: roundError } = await supabase
       .from('rounds')
-      .select('*')
+      .select('game_id, type')
       .eq('id', roundId)
       .single();
 
-    if (roundError || !round) {
+    if (roundError || !roundData) {
       throw roundError || new Error('Round not found');
     }
 
-    // Get all submissions for this round
-    const { data: submissions, error: submissionsError } = await supabase
+    // Fetch all submissions for this round
+    const { data: submissionsData, error: submissionsError } = await supabase
       .from('submissions')
-      .select('*')
+      .select('player_id, word')
       .eq('round_id', roundId);
 
     if (submissionsError) {
       throw submissionsError;
     }
 
-    if (!submissions || submissions.length === 0) {
+    if (!submissionsData || submissionsData.length === 0) {
       console.log('No submissions found for round', roundId);
       return; // No submissions to score
     }
@@ -84,7 +84,7 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
     const playerWords: { [playerId: string]: string[] } = {};
     
     // Group submissions by player
-    submissions.forEach(submission => {
+    submissionsData.forEach(submission => {
       if (!playerWords[submission.player_id]) {
         playerWords[submission.player_id] = [];
       }
@@ -96,15 +96,24 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
     
     console.log('Player words for scoring:', playerWords);
 
-    // Calculate scores based on round type
-    let scores: any = {};
+    // Define the PlayerScores type to match what the calculation functions return
+    interface PlayerScore {
+      score: number;
+      matchedWords: string[];
+      bonusAwarded: boolean;
+    }
     
-    if (round.type === 'match') {
+    type PlayerScores = Record<string, PlayerScore>;
+    
+    // Calculate scores based on round type
+    let scores: PlayerScores = {};
+    
+    if (roundData.type === 'match') {
       // For match rounds, use the enhanced scoring logic
       scores = calculateMatchRoundScores(playerWords);
       console.log('Match round scores:', scores);
     } else {
-      // For unmatch rounds, use the unmatch scoring logic
+      // For unmatch rounds, use the enhanced scoring logic
       scores = calculateUnmatchRoundScores(playerWords);
       console.log('Unmatch round scores:', scores);
     }
@@ -116,7 +125,7 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
     const { data: game, error: gameError } = await supabase
       .from('games')
       .select('round_count, current_round')
-      .eq('id', round.game_id)
+      .eq('id', roundData.game_id)
       .single();
 
     if (gameError) {
@@ -133,7 +142,7 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
         const { error: updateError } = await supabase
           .from('games')
           .update({ status: 'completed' })
-          .eq('id', round.game_id);
+          .eq('id', roundData.game_id);
           
         if (updateError) {
           console.error('Error updating game status to completed:', updateError);
@@ -194,7 +203,7 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
         const { error: roundError } = await supabase
           .from('rounds')
           .insert({
-            game_id: round.game_id,
+            game_id: roundData.game_id,
             round_number: nextRoundNumber,
             type: nextRoundType,
             topic: nextTopic.name,
@@ -210,7 +219,7 @@ async function calculateRoundScores(roundId: string, roundNumber: number) {
           const { error: updateGameError } = await supabase
             .from('games')
             .update({ current_round: nextRoundNumber })
-            .eq('id', round.game_id);
+            .eq('id', roundData.game_id);
 
           if (updateGameError) {
             console.error('Error updating game current round:', updateGameError);

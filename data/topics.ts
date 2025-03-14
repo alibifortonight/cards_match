@@ -1,20 +1,17 @@
-// Follow Deno's module import pattern
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-
 // Define topic interface
-interface Topic {
+export interface Topic {
   id: string;
   name: string;
   description: string;
 }
 
-interface TopicsCollection {
+export interface TopicsCollection {
   match: Topic[];
   unmatch: Topic[];
 }
 
 // Define all game topics
-const topics: TopicsCollection = {
+export const topics: TopicsCollection = {
   match: [
     { id: 'animals', name: 'Animals', description: 'Think of animals from around the world' },
     { id: 'countries', name: 'Countries', description: 'Name countries from any continent' },
@@ -40,30 +37,3 @@ const topics: TopicsCollection = {
     { id: 'technology', name: 'Technology', description: 'List gadgets, devices, and technological concepts' }
   ]
 };
-
-serve(async (req: Request) => {
-  // Enable CORS
-  const headers = new Headers({
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
-  });
-
-  // Handle OPTIONS request for CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers });
-  }
-
-  // Handle GET request
-  if (req.method === 'GET') {
-    // Return all topics
-    return new Response(JSON.stringify(topics), { headers });
-  }
-
-  // Return 405 Method Not Allowed for other request methods
-  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-    status: 405,
-    headers
-  });
-});

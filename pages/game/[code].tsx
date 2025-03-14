@@ -1,13 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 
 // Initialize Supabase client
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+// Create client only if URL and key are available (prevents build errors)
+const supabase = supabaseUrl && supabaseAnonKey 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 // Time per round in seconds
 const ROUND_TIME = 60;
@@ -59,39 +63,314 @@ export default function Game() {
   const { code } = router.query;
   
   // State variables
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
   const [game, setGame] = useState<Game | null>(null);
   const [gameId, setGameId] = useState<string | null>(null);
+  const [playerId, setPlayerId] = useState<string | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
-  const [playerId, setPlayerId] = useState<string | null>(null);
-  const [isHost, setIsHost] = useState<boolean>(false);
   const [currentRound, setCurrentRound] = useState<Round | null>(null);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [words, setWords] = useState<string[]>(Array(5).fill(''));
-  const [hasSubmitted, setHasSubmitted] = useState<boolean>(false);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [words, setWords] = useState<string[]>([]);
   const [submittedWords, setSubmittedWords] = useState<string[]>([]);
-  const [allPlayersSubmitted, setAllPlayersSubmitted] = useState<boolean>(false);
-  const [timeLeft, setTimeLeft] = useState(ROUND_TIME);
-  const [isRoundActive, setIsRoundActive] = useState(false);
+  const [newWord, setNewWord] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setLoading] = useState(true);
+  const [allPlayersSubmitted, setAllPlayersSubmitted] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const [showScoreboard, setShowScoreboard] = useState(false);
+  const [isRoundActive, setIsRoundActive] = useState(false);
   const [roundEnded, setRoundEnded] = useState(false);
+  const [startingRound, setStartingRound] = useState(false);
   
-  // References for input fields
+  // Refs
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  
-  // Timer interval reference
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // Auto-save interval reference
   const autoSaveRef = useRef<NodeJS.Timeout | null>(null);
+  const listenersSetup = useRef(false);
+
+  // Function to set up real-time listeners
+  const setupRealtimeListeners = (gameId: string, playerIdParam: string) => {
+    if (!supabase || !gameId) {
+      console.error('Cannot set up listeners: supabase client or gameId is missing');
+      return;
+    }
+    
+    console.log('Setting up real-time listeners for game:', gameId);
+    
+    // Listen for game updates
+    const gameChannel = supabase
+      .channel('game_updates')
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'games',
+        filter: `id=eq.${gameId}`
+      }, (payload) => {
+        console.log('Game updated:', payload);
+        setGame(payload.new as Game);
+        
+        // If game is completed, redirect to scoreboard
+        if (payload.new.status === 'completed') {
+          router.push(`/scoreboard/${code}`);
+        }
+      })
+      .subscribe();
+      
+    // Listen for round updates
+    const roundChannel = supabase
+      .channel('round_updates')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'rounds',
+        filter: `game_id=eq.${gameId}`
+      }, (payload) => {
+        console.log('New round created:', payload);
+        const newRound = payload.new as Round;
+        setCurrentRound(newRound);
+        setRoundEnded(false);
+        setIsRoundActive(true);
+        setHasSubmitted(false);
+        setSubmittedWords([]);
+        setWords(['', '', '', '', '']);
+        
+        // Reset timer
+        const now = new Date().getTime();
+        const startTime = new Date(newRound.start_time).getTime();
+        const elapsed = Math.floor((now - startTime) / 1000);
+        const remaining = Math.max(0, ROUND_TIME - elapsed);
+        setTimeLeft(remaining);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rounds',
+        filter: `game_id=eq.${gameId}`
+      }, (payload) => {
+        console.log('Round updated:', payload);
+        const updatedRound = payload.new as Round;
+        setCurrentRound(updatedRound);
+        
+        if (updatedRound.end_time) {
+          setRoundEnded(true);
+          setIsRoundActive(false);
+          setTimeLeft(0);
+        }
+      })
+      .subscribe();
+      
+    // Listen for submission updates
+    const submissionChannel = supabase
+      .channel('submission_updates')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'submissions',
+        filter: `player_id=eq.${playerIdParam}`
+      }, (payload) => {
+        console.log('New submission:', payload);
+        // Update submitted words if this is for the current player
+        const submission = payload.new as Submission;
+        if (submission.player_id === playerIdParam) {
+          setSubmittedWords(prev => [...prev, submission.word]);
+        }
+      })
+      .subscribe();
+      
+    // Store channel references for cleanup
+    return { gameChannel, roundChannel, submissionChannel };
+  };
+
+  // Load game data
+  const loadGameData = useCallback(async () => {
+    try {
+      if (!code || !supabase) {
+        console.error('Missing code or supabase client');
+        return;
+      }
+      
+      setLoading(true);
+      setError(null);
+      
+      // Get player ID from localStorage
+      const storedPlayerId = localStorage.getItem(`player_${code}`);
+      
+      if (!storedPlayerId) {
+        router.push(`/lobby/${code}`);
+        return;
+      }
+      
+      // Set playerId in state if not already set
+      if (!playerId) {
+        setPlayerId(storedPlayerId);
+      }
+      
+      // Get the game by code
+      const { data: gameData, error: gameError } = await supabase
+        .from('games')
+        .select('*')
+        .eq('code', code)
+        .single();
+        
+      if (gameError) {
+        throw new Error(`Error fetching game: ${gameError.message}`);
+      }
+      
+      if (!gameData) {
+        throw new Error('Game not found');
+      }
+      
+      // Set game data in state
+      setGame(gameData);
+      setGameId(gameData.id);
+      
+      // Get the current player
+      const { data: playerData, error: playerError } = await supabase
+        .from('players')
+        .select('*')
+        .eq('id', storedPlayerId)
+        .single();
+        
+      if (playerError) {
+        throw new Error(`Error fetching player: ${playerError.message}`);
+      }
+      
+      if (!playerData) {
+        throw new Error('Player not found');
+      }
+      
+      // Set player data in state
+      setCurrentPlayer(playerData);
+      setIsHost(playerData.is_host);
+      
+      // Get all players in the game
+      const { data: playersData, error: playersError } = await supabase
+        .from('players')
+        .select('*')
+        .eq('game_id', gameData.id);
+        
+      if (playersError) {
+        throw new Error(`Error fetching players: ${playersError.message}`);
+      }
+      
+      setPlayers(playersData || []);
+      
+      // Get current round if game is in progress
+      if (gameData.status === 'in-progress' && gameData.current_round > 0) {
+        const { data: roundData, error: roundError } = await supabase
+          .from('rounds')
+          .select('*')
+          .eq('game_id', gameData.id)
+          .eq('round_number', gameData.current_round)
+          .single();
+        
+        if (roundError) {
+          console.error('Error fetching round data:', roundError);
+          // If we can't find the round, don't retry automatically
+          // This prevents potential infinite loops
+          if (roundError.code === 'PGRST116') {
+            console.log('No round found, waiting for round to be created');
+          } else {
+            throw roundError;
+          }
+        }
+
+        if (roundData) {
+          setCurrentRound(roundData);
+          
+          // Check if player has already submitted words
+          const { data: submissionsData, error: submissionsError } = await supabase
+            .from('submissions')
+            .select('word')
+            .eq('round_id', roundData.id)
+            .eq('player_id', storedPlayerId);
+            
+          if (submissionsError) {
+            console.error('Error fetching submissions:', submissionsError);
+          }
+          
+          if (submissionsData && submissionsData.length > 0) {
+            setHasSubmitted(true);
+            setSubmittedWords(submissionsData.map(s => s.word));
+          }
+          
+          // Check round status
+          const now = new Date().getTime();
+          const startTime = new Date(roundData.start_time).getTime();
+          const elapsed = Math.floor((now - startTime) / 1000);
+          const remaining = Math.max(0, ROUND_TIME - elapsed);
+          
+          setTimeLeft(remaining);
+          setIsRoundActive(remaining > 0 && !roundData.end_time);
+          setRoundEnded(!!roundData.end_time);
+        }
+      }
+      
+      // Set up real-time listeners if we have the game ID and it's not already set up
+      if (gameData.id && !listenersSetup.current) {
+        const channels = setupRealtimeListeners(gameData.id, storedPlayerId);
+        listenersSetup.current = true;
+        return channels;
+      }
+    } catch (err) {
+      console.error('Error in loadGameData:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load game data');
+    } finally {
+      setLoading(false);
+    }
+  }, [code, router, supabase, playerId]);
+
+  // Initialize on component mount
+  useEffect(() => {
+    // Check if we're in a browser environment and have Supabase credentials
+    if (typeof window !== 'undefined' && code && supabase) {
+      // Get player ID from localStorage
+      const playerId = localStorage.getItem(`player_${code}`);
+      
+      if (!playerId) {
+        // Redirect to lobby if player ID not found
+        router.push(`/lobby/${code}`);
+        return;
+      }
+      
+      // Initialize game state
+      loadGameData();
+      
+      let channels: any = null;
+      
+      return () => {
+        // Clean up listeners on unmount
+        if (supabase && channels) {
+          // If we have specific channel references, use them
+          if (channels.gameChannel) supabase.removeChannel(channels.gameChannel);
+          if (channels.roundChannel) supabase.removeChannel(channels.roundChannel);
+          if (channels.submissionChannel) supabase.removeChannel(channels.submissionChannel);
+        } else if (supabase) {
+          // Fallback cleanup
+          supabase.channel('game_updates').unsubscribe();
+          supabase.channel('round_updates').unsubscribe();
+          supabase.channel('submission_updates').unsubscribe();
+        }
+        
+        // Clear any timers
+        if (timerRef.current) clearInterval(timerRef.current);
+        if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+      };
+    } else if (typeof window !== 'undefined' && code) {
+      // If we're in browser but don't have Supabase credentials, show error
+      setError('Unable to connect to the game server. Please check your connection and try again.');
+      setLoading(false);
+    }
+  }, [code, router, supabase, loadGameData]);
 
   // Function to format time as MM:SS
-  const formatTime = (seconds: number): string => {
+  const formatTime = (seconds: number | null): string => {
+    if (seconds === null) return '00:00';
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Handle word input change
@@ -207,265 +486,78 @@ export default function Game() {
   };
 
   // Start the next round
-  const startNextRound = async (): Promise<void> => {
-    if (!game || !currentPlayer?.is_host) return;
-
+  const startNextRound = async () => {
+    if (!gameId || !playerId) {
+      console.error('Cannot start next round: gameId or playerId is missing');
+      return;
+    }
+    
     try {
-      setError('');
-      console.log('Starting next round for game:', game.id);
-      console.log('Current round:', currentRound);
+      setStartingRound(true);
       
-      // Call the API to start the next round
+      console.log('Starting next round with:', {
+        gameId,
+        playerId,
+        currentRoundNumber: currentRound ? currentRound.round_number : 0
+      });
+      
       const response = await fetch('/api/games/start-round', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          gameId: game.id,
-          playerId: currentPlayer.id,
+          gameId,
+          playerId,
           currentRoundNumber: currentRound ? currentRound.round_number : 0
         }),
       });
-
-      const data = await response.json();
       
       if (!response.ok) {
-        console.error('Error response from start-round API:', data);
-        throw new Error(data.error || 'Failed to start next round');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to start next round');
       }
       
-      console.log('Next round started successfully:', data);
+      const data = await response.json();
+      console.log('Next round started:', data);
       
-      // Force reload to get the new round data
-      window.location.reload();
-    } catch (err) {
-      console.error('Error starting next round:', err);
-      setError(`Failed to start the next round: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      // We don't need to manually update state here as the real-time listeners will handle it
+      // This prevents duplicate state updates that could cause infinite loops
+      
+      setHasSubmitted(false);
+      setSubmittedWords([]);
+      setWords(['', '', '', '', '']);
+      setRoundEnded(false);
+    } catch (error) {
+      console.error('Error starting next round:', error);
+      setError(error instanceof Error ? error.message : 'Failed to start next round');
+    } finally {
+      setStartingRound(false);
     }
   };
 
-  // Load game and player data
-  useEffect(() => {
-    if (!code) return;
-
-    const loadGameData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        // Get the game
-        const { data: gameData, error: gameError } = await supabase
-          .from('games')
-          .select('*')
-          .eq('code', code)
-          .single();
-
-        if (gameError) throw gameError;
-        if (!gameData) throw new Error('Game not found');
-        
-        setGame(gameData);
-        setGameId(gameData.id);
-
-        // Get the current player from localStorage
-        const storedPlayerId = localStorage.getItem('playerId');
-        if (!storedPlayerId) {
-          throw new Error('Player not found. Please join the game again.');
-        }
-        
-        setPlayerId(storedPlayerId);
-
-        // Get the player data
-        const { data: playerData, error: playerError } = await supabase
-          .from('players')
-          .select('*')
-          .eq('id', storedPlayerId)
-          .single();
-
-        if (playerError) throw playerError;
-        if (!playerData) throw new Error('Player not found');
-        
-        setCurrentPlayer(playerData);
-        setIsHost(playerData.is_host);
-
-        // Get all players in the game
-        const { data: playersData, error: playersError } = await supabase
-          .from('players')
-          .select('*')
-          .eq('game_id', gameData.id);
-
-        if (playersError) throw playersError;
-        setPlayers(playersData || []);
-
-        // Get the current round
-        const { data: roundData, error: roundError } = await supabase
-          .from('rounds')
-          .select('*')
-          .eq('game_id', gameData.id)
-          .eq('round_number', gameData.current_round)
-          .single();
-
-        if (roundError && roundError.code !== 'PGRST116') {
-          // PGRST116 is "no rows returned" - this is expected if the game hasn't started yet
-          throw roundError;
-        }
-
-        if (roundData) {
-          setCurrentRound(roundData);
-          
-          // Check if the player has already submitted words for this round
-          const { data: submissionsData, error: submissionsError } = await supabase
-            .from('submissions')
-            .select('word')
-            .eq('round_id', roundData.id)
-            .eq('player_id', storedPlayerId);
-            
-          if (!submissionsError && submissionsData && submissionsData.length > 0) {
-            setHasSubmitted(true);
-            setSubmittedWords(submissionsData.map(s => s.word));
-          }
-          
-          // Set timer based on round start time and duration
-          if (roundData.start_time && roundData.duration) {
-            const startTime = new Date(roundData.start_time).getTime();
-            const now = new Date().getTime();
-            const elapsed = Math.floor((now - startTime) / 1000);
-            const remaining = Math.max(0, roundData.duration - elapsed);
-            
-            setTimeLeft(remaining);
-            setIsRoundActive(remaining > 0 && !roundData.end_time);
-          }
-          
-          // Check if all players have submitted
-          await fetchSubmissionCounts();
-        } else if (gameData.status === 'in-progress') {
-          // Game is in progress but no round data yet - check for rounds
-          console.log('Game is in progress but no round data found. Checking for rounds...');
-          checkForNextRound();
-        }
-      } catch (err) {
-        console.error('Error loading game data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load game data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadGameData();
-  }, [code]);
-  
   // Set up real-time subscriptions
   useEffect(() => {
     if (!gameId || !code) return;
     
-    console.log('Setting up real-time subscriptions for game:', gameId);
+    console.log('Game ID and code available for real-time updates');
     
-    // Set up real-time subscriptions for game updates
-    const gameSubscription = supabase
-      .channel(`game:${gameId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'games',
-        filter: `id=eq.${gameId}`
-      }, (payload) => {
-        console.log('Game updated:', payload);
-        const updatedGame = payload.new as Game;
-        const oldGame = payload.old as Game;
-        setGame(updatedGame);
-        
-        // If game is completed, redirect to scoreboard
-        if (updatedGame.status === 'completed') {
-          router.push(`/scoreboard/${code}`);
-          return;
-        }
-        
-        // If current round changed, check for the new round data
-        if (updatedGame.current_round !== oldGame.current_round) {
-          console.log(`Current round changed from ${oldGame.current_round} to ${updatedGame.current_round}`);
-          checkForNextRound();
-        }
-      })
-      .subscribe();
-
-    // Set up real-time subscriptions for player updates
-    const playersSubscription = supabase
-      .channel(`players:${gameId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'players',
-        filter: `game_id=eq.${gameId}`,
-      }, (payload) => {
-        setPlayers(current => 
-          current.map(p => p.id === payload.new.id ? payload.new as Player : p)
-        );
-      })
-      .subscribe();
-    
-    // Cleanup subscriptions on unmount
     return () => {
-      console.log('Cleaning up subscriptions');
-      supabase.removeChannel(gameSubscription);
-      supabase.removeChannel(playersSubscription);
-      
-      // Clear intervals
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+      // Cleanup handled in the main useEffect
     };
-  }, [gameId, code, router]);
-  
+  }, [gameId, code]);
+
   // Set up round-specific subscriptions
   useEffect(() => {
     if (!currentRound?.id) return;
     
-    console.log('Setting up real-time subscriptions for round:', currentRound.id);
+    console.log('Current round ID available:', currentRound.id);
     
-    // Set up real-time subscriptions for submissions
-    const submissionsSubscription = supabase
-      .channel(`submissions:${currentRound.id}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'submissions',
-        filter: `round_id=eq.${currentRound.id}`,
-      }, () => {
-        // Refresh submissions count for all players
-        fetchSubmissionCounts();
-      })
-      .subscribe();
-
-    // Set up real-time subscriptions for round updates
-    const roundSubscription = supabase
-      .channel(`round:${currentRound.id}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'rounds',
-        filter: `id=eq.${currentRound.id}`
-      }, (payload) => {
-        console.log('Round updated:', payload);
-        const updatedRound = payload.new as Round;
-        setCurrentRound(prevRound => {
-          if (!prevRound) return updatedRound;
-          return { ...prevRound, ...updatedRound };
-        });
-        
-        // If the round has an end_time, it's completed
-        if (updatedRound.end_time) {
-          console.log('Round ended, checking for next round');
-          checkForNextRound();
-        }
-      })
-      .subscribe();
-      
     return () => {
-      console.log('Cleaning up round subscriptions');
-      supabase.removeChannel(submissionsSubscription);
-      supabase.removeChannel(roundSubscription);
+      // Cleanup handled in the main useEffect
     };
   }, [currentRound?.id]);
-  
+
   // Function to check for the next round
   const checkForNextRound = async () => {
     if (!game || !code) return;
@@ -596,41 +688,35 @@ export default function Game() {
 
   // Set up the countdown timer
   useEffect(() => {
-    if (isRoundActive && timeLeft > 0) {
+    if (isRoundActive && timeLeft !== null && timeLeft > 0) {
       timerRef.current = setInterval(() => {
         setTimeLeft(prev => {
-          if (prev <= 1) {
-            // Time's up, clear interval and end round
-            if (timerRef.current) clearInterval(timerRef.current);
-            setIsRoundActive(false);
-            setRoundEnded(true);
-            
-            // Auto-submit words if player hasn't submitted yet
-            if (currentPlayer && !hasSubmitted) {
-              handleSubmitWords();
+          if (prev === null || prev <= 1) {
+            // Clear the interval when time is up
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
             }
-            
-            // If player is host, end the round
-            if (currentPlayer?.is_host) {
-              console.log('Time is up, host is ending the round');
-              endRound();
-            }
-            
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
       
-      // Set up auto-save interval (every 10 seconds)
-      autoSaveRef.current = setInterval(autoSaveWords, 10000);
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+      };
     }
+  }, [isRoundActive, timeLeft]);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (autoSaveRef.current) clearInterval(autoSaveRef.current);
-    };
-  }, [isRoundActive, timeLeft, currentPlayer]);
+  // Handle time up
+  useEffect(() => {
+    if (timeLeft === 0 && !hasSubmitted && !roundEnded) {
+      // Auto-submit when time runs out
+      handleSubmitWords();
+    }
+  }, [timeLeft, hasSubmitted, roundEnded]);
 
   // Fetch submission counts when the round changes
   useEffect(() => {
@@ -639,12 +725,40 @@ export default function Game() {
     }
   }, [currentRound]);
 
-  if (loading) {
+  // Check for next round
+  useEffect(() => {
+    if (roundEnded) {
+      checkForNextRound();
+    }
+  }, [roundEnded, checkForNextRound]);
+
+  // Fetch submission counts periodically
+  useEffect(() => {
+    if (game && currentRound && !hasSubmitted && !roundEnded) {
+      const interval = setInterval(() => {
+        fetchSubmissionCounts();
+      }, 5000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [game, currentRound, hasSubmitted, roundEnded, fetchSubmissionCounts]);
+
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-700">Loading game...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-700">{error}</p>
         </div>
       </div>
     );
@@ -696,16 +810,17 @@ export default function Game() {
                     }`}>
                       {currentRound.type === 'match' 
                         ? 'Match Words Round' 
-                        : 'Be Unique Round'}
+                        : 'Unmatch Words Round'}
                     </h2>
                     <div className={`text-xl font-mono ${
+                      timeLeft === null ? 'text-gray-600' :
                       timeLeft <= 10 
                         ? 'text-red-600 animate-pulse' 
                         : timeLeft <= 30 
                           ? 'text-orange-600' 
-                          : 'text-gray-700'
+                          : 'text-green-600'
                     }`}>
-                      {formatTime(timeLeft)}
+                      Time left: {formatTime(timeLeft)}
                     </div>
                   </div>
                   <div className="text-xl font-medium text-gray-800 mb-1">

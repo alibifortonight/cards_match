@@ -121,7 +121,6 @@ Topics can be loaded in several ways:
 
 1. **Server-side**: Using the `loadTopicsFromFile` function to read directly from the JSON file
 2. **API Route**: Through a Next.js API route at `/api/topics` that serves the topics
-3. **Edge Function**: The Supabase Edge Function can also serve topics and has a cached version
 
 ### Using Topics in Rounds
 
@@ -140,115 +139,64 @@ The application uses Supabase Realtime to handle real-time updates for:
 3. **Submissions**: When players submit words during a round
 4. **Score updates**: When round scores are calculated
 
-## Deployment Guide
+## Deployment
 
 ### Deploying to Vercel
 
-1. **Push your code to GitHub**
-   - Create a new repository on GitHub
-   - Push your local code to the repository
-
-2. **Connect to Vercel**
-   - Go to [Vercel](https://vercel.com) and sign in
-   - Click "Add New..." and select "Project"
-   - Import your GitHub repository
-   - Configure the project settings:
-     - Framework Preset: Next.js
-     - Root Directory: ./
-     - Build Command: npm run build
-     - Output Directory: .next
-
-3. **Set up Environment Variables**
-   - In the Vercel project settings, go to "Environment Variables"
-   - Add the following variables:
-     ```
-     NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
-     NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-     NEXT_PUBLIC_BASE_URL=your-vercel-deployment-url
-     ```
-   - Click "Deploy" to start the deployment process
-
-### Setting up Supabase Edge Functions
-
-1. **Install Supabase CLI**
+1. Make sure you have the Vercel CLI installed:
    ```bash
-   npm install -g supabase
+   npm install -g vercel
    ```
 
-2. **Login to Supabase**
+2. Log in to Vercel:
    ```bash
-   supabase login
+   vercel login
    ```
 
-3. **Initialize Supabase in your project**
+3. Deploy the application:
    ```bash
-   supabase init
+   vercel
    ```
 
-4. **Link to your Supabase project**
+4. Set the following environment variables in the Vercel dashboard:
+   - `NEXT_PUBLIC_SUPABASE_URL`: Your Supabase project URL
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase anonymous key
+   - `NEXT_PUBLIC_BASE_URL`: This will be automatically set by Vercel to your deployment URL
+
+5. After deployment, you can promote it to production:
    ```bash
-   supabase link --project-ref your-project-ref
+   vercel --prod
    ```
 
-5. **Create an Edge Function**
-   ```bash
-   supabase functions new topics-function
-   ```
+### Troubleshooting Deployment Issues
 
-6. **Edit the Edge Function**
-   - Navigate to `supabase/functions/topics-function/index.ts`
-   - Implement your function (example below)
+1. **Build Errors**:
+   - If you encounter build errors related to ESLint or TypeScript, check the error logs in the Vercel dashboard.
+   - You can temporarily disable TypeScript checking during build by setting `ignoreBuildErrors: true` in your `next.config.js` file.
 
-   ```typescript
-   import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+2. **Environment Variables**:
+   - Ensure all required environment variables are set in the Vercel dashboard.
+   - You can check if your environment variables are correctly loaded by adding console logs in your code.
 
-   const topics = {
-     match: [
-       { id: 'animals', name: 'Animals', description: 'Think of animals from around the world' },
-       { id: 'countries', name: 'Countries', description: 'Name countries from any continent' },
-       { id: 'food', name: 'Food', description: 'List different types of food and dishes' },
-       // Add more topics...
-     ],
-     unmatch: [
-       { id: 'emotions', name: 'Emotions', description: 'List different feelings and emotional states' },
-       { id: 'colors', name: 'Colors', description: 'Name different colors and shades' },
-       { id: 'weather', name: 'Weather Phenomena', description: 'Think of different weather conditions and events' },
-       // Add more topics...
-     ]
-   }
+3. **API Endpoints**:
+   - If API endpoints are not working, check the function logs in the Vercel dashboard.
+   - Ensure your Supabase URL and anonymous key are correctly set.
 
-   serve(async (req) => {
-     // Enable CORS
-     const headers = new Headers({
-       'Access-Control-Allow-Origin': '*',
-       'Access-Control-Allow-Methods': 'GET, OPTIONS',
-       'Content-Type': 'application/json'
-     })
+4. **Database Issues**:
+   - Verify that your Supabase database is accessible from your Vercel deployment.
+   - Check the Supabase dashboard for any error logs or connection issues.
 
-     // Handle preflight requests
-     if (req.method === 'OPTIONS') {
-       return new Response('ok', { headers })
-     }
+### Testing Your Deployment
 
-     return new Response(
-       JSON.stringify(topics),
-       { headers }
-     )
-   })
-   ```
+1. Visit your deployed application URL.
+2. Create a new game and verify that topics are loaded correctly.
+3. Test the complete game flow to ensure everything works as expected.
+4. Check the browser console for any JavaScript errors.
 
-7. **Deploy the Edge Function**
-   ```bash
-   supabase functions deploy topics-function
-   ```
-
-8. **Update your application to use the Edge Function**
-   - Replace the local API endpoints with your Supabase Edge Function URL
-   - For example, in `pages/api/games/end-round.ts`:
-
-   ```typescript
-   const apiUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/topics-function`;
-   ```
+Remember that the database schema for your Cards Match game has these important details:
+- The `games` table uses 'in-progress' as the status when a game is running
+- The `rounds` table uses `end_time` to track round completion
+- Player submission status is tracked using the `submissions` table
 
 ## How to Use
 
